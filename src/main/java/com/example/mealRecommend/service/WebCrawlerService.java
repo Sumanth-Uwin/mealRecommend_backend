@@ -1,12 +1,13 @@
 package com.example.mealRecommend.service;
 
-import com.example.mealRecommend.model.MealKitServiceData;
+import com.example.mealRecommend.model.Recipe;
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.springframework.stereotype.Service;
 import io.github.bonigarcia.wdm.WebDriverManager;
 
@@ -16,79 +17,76 @@ import java.util.List;
 
 @Service
 public class WebCrawlerService {
+    private static final double PRICE_PER_SERVING = 11.00;
 
-    static {
-        // Automatically sets up the ChromeDriver for Selenium
-        WebDriverManager.chromedriver().setup();
-    }
+    public List<Recipe> scrapeRecipes() {
+        // Use WebDriverManager to automatically download the appropriate WebDriver
 
-    public List<MealKitServiceData> crawlAllServices() {
-        // Set the system property for the ChromeDriver and initialize WebDriver
         System.setProperty("webdriver.chrome.driver", "chromedriver.exe");
-        WebDriver driver = new ChromeDriver();
-        List<MealKitServiceData> mealKitServices = new ArrayList<>();
+
+
+        // Configure ChromeOptions for headless mode
+        ChromeOptions options = new ChromeOptions();
+        options.addArguments("--headless"); // Run Chrome in headless mode
+        options.addArguments("--disable-gpu");
+        options.addArguments("--no-sandbox");
+        options.addArguments("--disable-dev-shm-usage");
+
+        // Initialize WebDriver with ChromeOptions
+        WebDriver driver = new ChromeDriver(options);
+        List<Recipe> recipes = new ArrayList<>();
 
         try {
-            // List of URLs to scrape
-            String[] urls = {
-                    "https://www.wecookmeals.ca/en/week-menu/2024-10-06",
-                    // Add other URLs as needed
-            };
+            driver.get("https://www.freshprep.ca/menu/this-week");
+            driver.manage().window().maximize();
 
-            for (String url : urls) {
-                driver.get(url);
-                driver.manage().window().maximize();
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
+            wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".row")));
 
-                // Scrape main menu items
-                mealKitServices.addAll(scrapeMenuItems(driver));
+            List<WebElement> recipeColumns = driver.findElements(By.xpath("//div[@class='row']//div[@class='recipe-col']"));
 
-                // Handle different sections if needed (e.g., Family Meal, Upsells)
-                mealKitServices.addAll(clickAndScrapeSection(driver, ".swiper-slide.w-fit.page-menu-item__family-meal", "Family Meal Recipes"));
-                mealKitServices.addAll(clickAndScrapeSection(driver, ".swiper-slide.w-fit.page-menu-item__week_upsells", "Week Upsells Recipes"));
-                mealKitServices.addAll(clickAndScrapeSection(driver, ".swiper-slide.w-fit.page-menu-item__groceries", "Groceries Recipes"));
+            for (WebElement recipeCol : recipeColumns) {
+                Recipe recipe = new Recipe();
+
+                String recipeName = recipeCol.findElement(By.xpath(".//h3")).getText();
+                String imgUrl = recipeCol.findElement(By.xpath(".//img[@class='logo lazyload']")).getAttribute("src");
+                List<WebElement> dietaryIcons = recipeCol.findElements(By.xpath(".//div[@class='recipe-icons']//img[contains(@src, 'dietary-icons-v-2/')]"));
+                List<String> iconNames = new ArrayList<>();
+
+                for (WebElement icon : dietaryIcons) {
+                    String iconSrc = icon.getAttribute("src");
+                    int lastSlashIndex = iconSrc.lastIndexOf('/');
+                    int dotIndex = iconSrc.indexOf('.', lastSlashIndex);
+                    if (lastSlashIndex != -1 && dotIndex != -1 && dotIndex > lastSlashIndex) {
+                        String iconName = iconSrc.substring(lastSlashIndex + 1, dotIndex);
+                        iconNames.add(iconName);
+                    }
+                }
+
+                String servesCount = recipeCol.findElement(By.xpath(".//div[@class='serving-info']//div[contains(@class, 'info-title') and text()='Serves']/following-sibling::div[@class='info-content']")).getText();
+                String cookingTime = recipeCol.findElement(By.xpath(".//div[@class='serving-info']//div[contains(@class, 'info-title') and text()='Time']/following-sibling::div[@class='info-content']")).getText();
+
+                recipe.setName(recipeName);
+                recipe.setImageUrl(imgUrl);
+                recipe.setdietaryOptions(iconNames);
+                recipe.setServes(servesCount);
+                recipe.setCookingTime(cookingTime);
+
+                try {
+                    int numberOfServings = Integer.parseInt(servesCount.replaceAll("[^0-9]", ""));
+                    double totalPrice = numberOfServings * PRICE_PER_SERVING;
+                    recipe.setPrice(String.format("$%.2f", totalPrice));
+                } catch (NumberFormatException e) {
+                    recipe.setPrice("N/A"); // Set to "N/A" if the serving count cannot be parsed
+                }
+
+                recipes.add(recipe);
             }
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
             driver.quit();
         }
-
-        return mealKitServices;
-    }
-
-    private List<MealKitServiceData> scrapeMenuItems(WebDriver driver) {
-        List<MealKitServiceData> data = new ArrayList<>();
-        List<WebElement> recipeImageElements = driver.findElements(By.xpath("//img[contains(@src,'https://cdn.')]"));
-        for (WebElement element : recipeImageElements) {
-            String imageUrl = element.getAttribute("src");
-            String recipeTitle = element.getAttribute("alt");
-
-            if (recipeTitle != null && !recipeTitle.isEmpty()) {
-                MealKitServiceData serviceData = new MealKitServiceData();
-                serviceData.setName(recipeTitle);
-                serviceData.setImageUrl(imageUrl);
-                data.add(serviceData);
-            }
-        }
-        return data;
-    }
-
-    private List<MealKitServiceData> clickAndScrapeSection(WebDriver driver, String cssSelector, String sectionName) {
-        List<MealKitServiceData> data = new ArrayList<>();
-        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(40));
-        try {
-            WebElement sectionElement = wait.until(ExpectedConditions.elementToBeClickable(By.cssSelector(cssSelector)));
-            sectionElement.click(); // Click to reveal the section
-
-            // Wait for the section content to load
-            wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".text-body-sm, .text-body-md")));
-
-            // Scrape the menu items in the clicked section
-            data.addAll(scrapeMenuItems(driver));
-        } catch (Exception e) {
-            System.out.println("Error while processing section: " + sectionName);
-            e.printStackTrace();
-        }
-        return data;
+        return recipes;
     }
 }

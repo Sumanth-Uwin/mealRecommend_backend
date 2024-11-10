@@ -1,7 +1,7 @@
 
 package com.example.mealRecommend.controller;
 
-import com.example.mealRecommend.model.MealKitServiceData;
+import com.example.mealRecommend.model.Recipe;
 import com.example.mealRecommend.service.WebCrawlerService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,8 +16,8 @@ public class WebCrawlerController {
     @Autowired
     private WebCrawlerService webCrawlerService;
 
-    @GetMapping("/crawl-meal-kit-services")
-    public List<MealKitServiceData> crawlAllMealKitServices() throws IOException {
-        return webCrawlerService.crawlAllServices();
+    @GetMapping("/wb1")
+    public List<Recipe> crawlAllMealKitServices() throws IOException {
+        return webCrawlerService.scrapeRecipes();
     }
 }
