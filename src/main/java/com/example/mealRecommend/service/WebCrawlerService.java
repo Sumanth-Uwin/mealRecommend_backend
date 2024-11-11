@@ -1,29 +1,58 @@
 package com.example.mealRecommend.service;
 
 import com.example.mealRecommend.model.Recipe;
+import com.example.mealRecommend.trie; // Import the Trie class
 import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
-import org.openqa.selenium.support.ui.WebDriverWait;
 import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.stereotype.Service;
-import io.github.bonigarcia.wdm.WebDriverManager;
 
+import javax.annotation.PostConstruct;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class WebCrawlerService {
     private static final double PRICE_PER_SERVING = 11.00;
+    private List<Recipe> recipes = new ArrayList<>();
+    private trie trie = new trie(); // Initialize the Trie
+
+    @PostConstruct
+    public void init() {
+        // Automatically scrape data and populate the Trie on startup
+        List<Recipe> scrapedRecipes = scrapeRecipes();
+        for (Recipe recipe : scrapedRecipes) {
+            // Insert individual words from the recipe name into the Trie
+            Arrays.stream(recipe.getName().toLowerCase().split("\\s+"))
+                    .forEach(trie::insert);
+
+            // Insert dietary options into the Trie
+            recipe.getdietaryOptions().forEach(option -> trie.insert(option.toLowerCase()));
+        }
+    }
+
+    public List<String> getSuggestions(String prefix) {
+        // Use Trie to get suggestions based on the prefix
+        return trie.getCompletions(prefix.toLowerCase());
+    }
+
+    public List<Recipe> searchRecipes(String query) {
+        String lowerCaseQuery = query.toLowerCase();
+        return recipes.stream()
+                .filter(recipe -> recipe.getName().toLowerCase().contains(lowerCaseQuery) ||
+                        recipe.getdietaryOptions().stream().anyMatch(option -> option.toLowerCase().contains(lowerCaseQuery)))
+                .collect(Collectors.toList());
+    }
 
     public List<Recipe> scrapeRecipes() {
-        // Use WebDriverManager to automatically download the appropriate WebDriver
-
         System.setProperty("webdriver.chrome.driver", "chromedriver.exe");
-
 
         // Configure ChromeOptions for headless mode
         ChromeOptions options = new ChromeOptions();
@@ -40,6 +69,7 @@ public class WebCrawlerService {
             driver.get("https://www.freshprep.ca/menu/this-week");
             driver.manage().window().maximize();
 
+            // Wait for the page to load and find elements
             WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
             wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".row")));
 
@@ -48,6 +78,7 @@ public class WebCrawlerService {
             for (WebElement recipeCol : recipeColumns) {
                 Recipe recipe = new Recipe();
 
+                // Extract recipe details
                 String recipeName = recipeCol.findElement(By.xpath(".//h3")).getText();
                 String imgUrl = recipeCol.findElement(By.xpath(".//img[@class='logo lazyload']")).getAttribute("src");
                 List<WebElement> dietaryIcons = recipeCol.findElements(By.xpath(".//div[@class='recipe-icons']//img[contains(@src, 'dietary-icons-v-2/')]"));
@@ -82,11 +113,19 @@ public class WebCrawlerService {
 
                 recipes.add(recipe);
             }
+
+            // Save scraped data in the service-level variable
+            this.recipes = recipes;
+
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
             driver.quit();
         }
         return recipes;
+    }
+
+    public List<Recipe> getAllRecipes() {
+        return new ArrayList<>(recipes);
     }
 }
