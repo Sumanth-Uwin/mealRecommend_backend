@@ -15,25 +15,22 @@ public class WebCrawlerController {
     @Autowired
     private WebCrawlerService webCrawlerService;
 
-    // Endpoint to trigger data scraping and load recipes when the application starts
+    // Load and merge data from all sources at application startup
     @PostConstruct
     public void loadInitialData() {
-        webCrawlerService.scrapeRecipes(); // Scrape and store recipes on application startup
+        webCrawlerService.init(); // Ensure the initialization method aligns with the service
     }
 
-    // Endpoint to get recipe suggestions based on a prefix
     @GetMapping("/suggestions")
     public List<String> getSuggestions(@RequestParam String prefix) {
         return webCrawlerService.getSuggestions(prefix);
     }
 
-    // Endpoint to search recipes based on a query term
     @PostMapping("/recipes")
     public List<Recipe> searchRecipes(@RequestParam String query) {
         return webCrawlerService.searchRecipes(query);
     }
 
-    // Endpoint to get all recipes (optional)
     @GetMapping("/all")
     public List<Recipe> getAllRecipes() {
         return webCrawlerService.getAllRecipes();
