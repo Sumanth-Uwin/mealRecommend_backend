@@ -2,22 +2,18 @@ package com.example.mealRecommend.service;
 
 import com.example.mealRecommend.model.Recipe;
 import com.example.mealRecommend.trie;
-import org.openqa.selenium.By;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
+import org.openqa.selenium.*;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.Select;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
-import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -25,24 +21,39 @@ public class WebCrawlerService {
     private static final double PRICE_PER_SERVING = 11.00;
     private List<Recipe> mergedRecipes = new ArrayList<>();
     private trie trie = new trie();
+    private boolean initialized = false;
 
     @Autowired
-    private WebScraper webScraper; // Second scraper service for additional data sources
+    private WebScraper webScraper;
 
     @PostConstruct
-    public void init() {
-        // Load and merge data from both scraping sources at startup
-        List<Recipe> source1Recipes = scrapeRecipesFromSource1();
-        List<Recipe> source2Recipes = webScraper.scrapeRecipes();
+    public synchronized void init() {
+        if (initialized) {
+            return; // Ensure scraping runs only once
+        }
 
-        // Merge the data and remove duplicates
-        mergedRecipes = mergeRecipes(source1Recipes, source2Recipes);
+        System.out.println("Starting Web Scraping...");
+        List<Recipe> allRecipes = new ArrayList<>();
+
+        try {
+            // Centralized scraping execution
+            allRecipes.addAll(scrapeRecipesFromFreshPrep());
+            allRecipes.addAll(webScraper.scrapeRecipes());
+            allRecipes.addAll(VedaService.scrapeRecipes());
+            allRecipes.addAll(DinnerlyRecipeScraper.scrapeRecipes());
+            allRecipes.addAll(SnapKitchenService.scrapeRecipes());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        // Merge recipes and remove duplicates
+        mergedRecipes = mergeRecipes(allRecipes);
 
         // Populate the Trie for suggestions
-        for (Recipe recipe : mergedRecipes) {
-            Arrays.stream(recipe.getName().toLowerCase().split("\\s+")).forEach(trie::insert);
-            recipe.getdietaryOptions().forEach(option -> trie.insert(option.toLowerCase()));
-        }
+        populateTrie();
+
+        initialized = true;
+        System.out.println("Web Scraping Completed. Total Recipes: " + mergedRecipes.size());
     }
 
     public List<Recipe> getAllRecipes() {
@@ -61,16 +72,12 @@ public class WebCrawlerService {
                 .collect(Collectors.toList());
     }
 
-    public List<Recipe> scrapeRecipesFromSource1() {
-        System.setProperty("webdriver.chrome.driver", "chromedriver.exe");
-        ChromeOptions options = new ChromeOptions();
-        options.addArguments("--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage");
-        WebDriver driver = new ChromeDriver(options);
+    private List<Recipe> scrapeRecipesFromFreshPrep() {
+        WebDriver driver = initializeDriver();
         List<Recipe> recipes = new ArrayList<>();
 
         try {
             driver.get("https://www.freshprep.ca/menu/this-week");
-            driver.manage().window().maximize();
             WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
             wait.until(ExpectedConditions.visibilityOfElementLocated(By.cssSelector(".row")));
 
@@ -80,31 +87,25 @@ public class WebCrawlerService {
                 Recipe recipe = new Recipe();
                 String recipeName = recipeCol.findElement(By.xpath(".//h3")).getText();
                 String imgUrl = recipeCol.findElement(By.xpath(".//img[@class='logo lazyload']")).getAttribute("src");
+
                 List<WebElement> dietaryIcons = recipeCol.findElements(By.xpath(".//div[@class='recipe-icons']//img[contains(@src, 'dietary-icons-v-2/')]"));
-                List<String> iconNames = new ArrayList<>();
+                List<String> iconNames = dietaryIcons.stream()
+                        .map(icon -> icon.getAttribute("src"))
+                        .map(src -> src.substring(src.lastIndexOf('/') + 1, src.indexOf('.', src.lastIndexOf('/'))))
+                        .collect(Collectors.toList());
 
-                for (WebElement icon : dietaryIcons) {
-                    String iconSrc = icon.getAttribute("src");
-                    int lastSlashIndex = iconSrc.lastIndexOf('/');
-                    int dotIndex = iconSrc.indexOf('.', lastSlashIndex);
-                    if (lastSlashIndex != -1 && dotIndex != -1 && dotIndex > lastSlashIndex) {
-                        String iconName = iconSrc.substring(lastSlashIndex + 1, dotIndex);
-                        iconNames.add(iconName);
-                    }
-                }
-
-                String servesCount = recipeCol.findElement(By.xpath(".//div[@class='serving-info']//div[contains(@class, 'info-title') and text()='Serves']/following-sibling::div[@class='info-content']")).getText();
-                String cookingTime = recipeCol.findElement(By.xpath(".//div[@class='serving-info']//div[contains(@class, 'info-title') and text()='Time']/following-sibling::div[@class='info-content']")).getText();
+                String servesCount = recipeCol.findElement(By.xpath(".//div[contains(@class, 'info-title') and text()='Serves']/following-sibling::div")).getText();
+                String cookingTime = recipeCol.findElement(By.xpath(".//div[contains(@class, 'info-title') and text()='Time']/following-sibling::div")).getText();
 
                 recipe.setName(recipeName);
                 recipe.setImageUrl(imgUrl);
                 recipe.setdietaryOptions(extractDietaryOptions(String.join(" ", iconNames)));
                 recipe.setServes(servesCount);
                 recipe.setCookingTime(cookingTime);
+
                 try {
                     int numberOfServings = Integer.parseInt(servesCount.replaceAll("[^0-9]", ""));
-                    double totalPrice = numberOfServings * PRICE_PER_SERVING;
-                    recipe.setPrice(String.format("$%.2f", totalPrice));
+                    recipe.setPrice(String.format("$%.2f", numberOfServings * PRICE_PER_SERVING));
                 } catch (NumberFormatException e) {
                     recipe.setPrice("N/A");
                 }
@@ -116,12 +117,29 @@ public class WebCrawlerService {
         } finally {
             driver.quit();
         }
+
         return recipes;
     }
 
-    private List<Recipe> mergeRecipes(List<Recipe> source1, List<Recipe> source2) {
-        List<Recipe> allRecipes = new ArrayList<>(source1);
-        allRecipes.addAll(source2);
+    private WebDriver initializeDriver() {
+        System.setProperty("webdriver.chrome.driver", "chromedriver.exe");
+        ChromeOptions options = new ChromeOptions();
+        options.addArguments("--headless", "--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage");
+        return new ChromeDriver(options);
+    }
+
+    private void populateTrie() {
+        for (Recipe recipe : mergedRecipes) {
+            Arrays.stream(recipe.getName().toLowerCase().split("\\s+")).forEach(trie::insert);
+            recipe.getdietaryOptions().forEach(option -> trie.insert(option.toLowerCase()));
+        }
+    }
+
+    private List<Recipe> mergeRecipes(List<Recipe>... sources) {
+        List<Recipe> allRecipes = new ArrayList<>();
+        for (List<Recipe> source : sources) {
+            allRecipes.addAll(source);
+        }
         return allRecipes.stream().distinct().collect(Collectors.toList());
     }
 
@@ -131,7 +149,7 @@ public class WebCrawlerService {
 
         if (containsProtein(nameLowerCase, "chicken", "beef", "pork", "lamb", "fish", "turkey", "duck", "sausage", "seafood", "bacon", "poultry")) {
             dietaryOptions.add("Non-Veg");
-        } else if ((nameLowerCase.contains("veg") || nameLowerCase.contains("vegetarian"))) {
+        } else if (nameLowerCase.contains("veg") || nameLowerCase.contains("vegetarian")) {
             dietaryOptions.add("Veg");
         } else if (nameLowerCase.contains("vegan")) {
             dietaryOptions.add("Vegan");
