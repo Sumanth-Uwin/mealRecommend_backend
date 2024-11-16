@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.HashSet;
+import java.util.Set;
 
 @Service
 public class WebScraper {
@@ -26,10 +28,12 @@ public class WebScraper {
                 "canadian-recipes", "asian-recipes", "american-recipes", "australian-recipes",
                 "british-recipes", "chinese-recipes", "french-recipes", "fusion-recipes",
                 "german-recipes", "cuban-recipes", "greek-recipes", "indian-recipes",
-                "african-recipes", "european-recipes", "caribbean-recipes", "eastern-european-recipes"
+                "african-recipes", "european-recipes", "eastern-european-recipes"
         };
 
         List<Recipe> recipes = new ArrayList<>();
+
+        Set<String> recipeNames = new HashSet<>(); // Track unique recipe names
 
         // Loop through each recipe category and scrape the recipes
         for (String tag : tags) {
@@ -54,6 +58,12 @@ public class WebScraper {
 
                         // Extract recipe details
                         String recipeName = recipeDoc.select("h1").text(); // Extract recipe name
+
+                        // Skip adding the recipe if the name already exists
+                        if (recipeNames.contains(recipeName)) {
+                            continue;
+                        }
+
                         String prepTime = extractTime(recipeDoc); // Extract prep time
                         String imageUrl = extractImageUrl(recipeDoc); // Extract image URL
                         if ("Not Found".equals(imageUrl)) {
@@ -74,6 +84,7 @@ public class WebScraper {
                         recipe.setPrice(price);
 
                         recipes.add(recipe); // Add the full Recipe object to the list
+                        recipeNames.add(recipeName); // Mark this recipe name as added
 
                     } catch (IOException e) {
                         System.err.println("Failed to scrape recipe page: " + recipeLink);
